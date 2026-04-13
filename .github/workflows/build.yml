@@ -13,6 +13,9 @@ jobs:
       KERNEL_REPO: https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git
       KERNEL_BRANCH: phoenix-r-oss
       DEFCONFIG: vendor/phoenix_user_defconfig
+      # ShirkNeko 时代老 SukiSU（完美支持 4.x 非 GKI 内核）
+      KSU_REPO: https://github.com/omeos-fork/ShirkNeko.SukiSU-Ultra.git
+      KSU_BRANCH: susfs-stable
       ARCH: arm64
     steps:
       - name: Checkout workflow repo
@@ -24,8 +27,7 @@ jobs:
           sudo apt-get install -y \
             bc bison build-essential ccache curl flex \
             git libelf-dev libncurses5-dev libssl-dev \
-            lld make rsync zip unzip cpio python3 \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+            lld make rsync zip unzip cpio python3
 
       - name: Shallow clone phoenix-r-oss kernel
         run: |
@@ -40,7 +42,6 @@ jobs:
 
       - name: Fetch AOSP GCC (arm64 + arm)
         run: |
-          # 4.14 内核链接阶段还需要 aarch64-linux-android-ld 等 binutils
           git clone --depth=1 -b android-10.0.0_r47 \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
             toolchain/gcc-arm64
@@ -48,51 +49,55 @@ jobs:
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
             toolchain/gcc-arm
 
-      - name: Integrate SukiSU Ultra (kprobe hook mode)
+      - name: Integrate ShirkNeko SukiSU (manual hook + 内建 susfs)
         working-directory: kernel
         run: |
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
-          echo "--- KernelSU/ 内容 ---"
-          ls KernelSU/kernel | head -20
-          echo "--- drivers/Makefile 是否已挂载 kernelsu ---"
-          grep kernelsu drivers/Makefile || (echo "FAIL: setup.sh 没改 drivers/Makefile" && exit 1)
-          # setup.sh 只软链 kernel/，但 kpm.h 依赖的 uapi/ 在仓库根目录
-          # 把 uapi/ 拷进 kernel/ 内，让 -I$(KSU_KERNEL_DIR) 能命中
-          cp -r KernelSU/uapi KernelSU/kernel/uapi
-          ls drivers/kernelsu/uapi/ | head -3
-          # kpm/Makefile 没有加 -I 父目录，ccflags 不继承自父 Kbuild 导致 uapi/ 找不着
-          echo 'ccflags-y += -I$(srctree)/$(src)/..' >> drivers/kernelsu/kpm/Makefile
-          echo "--- kpm/Makefile 末尾 ---"
-          tail -3 drivers/kernelsu/kpm/Makefile
+          # 直接 git clone fork（原 ShirkNeko 仓库已 404，不能用 setup.sh）
+          git clone --depth=1 -b "$KSU_BRANCH" "$KSU_REPO" KernelSU
+          # drivers/kernelsu 软链到 KernelSU/kernel
+          ln -sf "../../KernelSU/kernel" "drivers/kernelsu"
+          # drivers/Makefile 挂载
+          grep -q "obj-\$(CONFIG_KSU)" drivers/Makefile || \
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          # drivers/Kconfig 注入
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || \
+            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          echo "--- drivers/Makefile 末尾 ---"; tail -3 drivers/Makefile
+          echo "--- drivers/kernelsu 目录 ---"; ls drivers/kernelsu/ | head -15
 
-      - name: Apply susfs4ksu (kernel-4.14)
+      - name: Apply susfs4ksu kernel-4.14 内核侧 patch
         working-directory: kernel
         run: |
           git clone --depth=1 -b kernel-4.14 https://gitlab.com/simonpunk/susfs4ksu.git ../susfs4ksu
-          # 拷贝 susfs 的新文件到内核树
           cp ../susfs4ksu/kernel_patches/fs/susfs.c    fs/
           cp ../susfs4ksu/kernel_patches/fs/sus_su.c   fs/
           cp ../susfs4ksu/kernel_patches/include/linux/susfs.h      include/linux/
           cp ../susfs4ksu/kernel_patches/include/linux/susfs_def.h  include/linux/
           cp ../susfs4ksu/kernel_patches/include/linux/sus_su.h     include/linux/
-          # 打主 patch（允许 fuzz=3 吸收高通魔改带来的小偏移）
           patch -p1 -F 3 --no-backup-if-mismatch < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch | tee /tmp/susfs_apply.log
-          # 失败 hunk 检查
           if grep -q "FAILED" /tmp/susfs_apply.log; then
-            echo "==== SUSFS patch 有 hunk 失败，拉 .rej 看下 ===="
+            echo "==== susfs patch 有失败 ===="
             find . -name "*.rej" -exec sh -c 'echo "---$1---"; cat "$1"' _ {} \;
             exit 1
           fi
-          echo "susfs patch 应用完成"
 
-      - name: Patch defconfig (开启 KSU + KPM + KPROBES + SUSFS)
+      - name: Apply manual hook patches (6 files)
+        working-directory: kernel
+        run: |
+          for p in ../patches/*.patch; do
+            echo "=== apply $(basename $p) ==="
+            patch -p1 -F 3 --no-backup-if-mismatch < "$p"
+          done
+          if find . -name "*.rej" | grep -q .; then
+            echo "==== manual hook patch 失败 ===="
+            find . -name "*.rej" -exec sh -c 'echo "---$1---"; cat "$1"' _ {} \;
+            exit 1
+          fi
+
+      - name: Patch defconfig (KSU_MANUAL_HOOK + SUSFS 全家桶, 关 KPM)
         working-directory: kernel
         run: |
           D="arch/arm64/configs/${DEFCONFIG}"
-          echo "--- 前置状态 ---"
-          grep -E "CONFIG_KPROBES|CONFIG_KALLSYMS|CONFIG_KSU|CONFIG_KPM|CONFIG_EXT4_FS" "$D" || true
-
-          # 工具函数：set_kv KEY VAL —— 存在则替换，不存在则追加
           set_kv() {
             local key=$1 val=$2
             if grep -qE "^(# )?${key}[= ]" "$D"; then
@@ -101,20 +106,32 @@ jobs:
               echo "${key}=${val}" >> "$D"
             fi
           }
+          unset_kv() {
+            local key=$1
+            sed -i -E "/^(# )?${key}[= ]/d" "$D"
+            echo "# ${key} is not set" >> "$D"
+          }
 
+          # KSU 核心
+          set_kv CONFIG_KSU y
+          set_kv CONFIG_KSU_MANUAL_HOOK y  # manual hook 模式，不靠 kprobe
+          set_kv CONFIG_OVERLAY_FS y       # KSU 硬依赖
+          # KSU_MANUAL_HOOK 的 Kconfig 依赖 KPROBES (即使不用)
           set_kv CONFIG_KPROBES y
-          set_kv CONFIG_KPROBE_EVENTS y
           set_kv CONFIG_HAVE_KPROBES y
+          set_kv CONFIG_KPROBE_EVENTS y
+          # kallsyms
           set_kv CONFIG_KALLSYMS y
           set_kv CONFIG_KALLSYMS_ALL y
-          set_kv CONFIG_KSU y
-          # KPM 在 4.14 编不过(access_ok 参数数量不兼容), 关掉; root 不依赖 KPM
-          set_kv CONFIG_KPM n
+          # 模块支持
           set_kv CONFIG_MODULES y
           set_kv CONFIG_MODULE_UNLOAD y
+          # KPM 在 4.14 上风险未知，先关
+          unset_kv CONFIG_KPM
 
-          # --- SUSFS ---
+          # SUSFS 全家桶
           set_kv CONFIG_KSU_SUSFS y
+          set_kv CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT y
           set_kv CONFIG_KSU_SUSFS_SUS_PATH y
           set_kv CONFIG_KSU_SUSFS_SUS_MOUNT y
           set_kv CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT y
@@ -124,19 +141,18 @@ jobs:
           set_kv CONFIG_KSU_SUSFS_TRY_UMOUNT y
           set_kv CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT y
           set_kv CONFIG_KSU_SUSFS_SPOOF_UNAME y
+          set_kv CONFIG_KSU_SUSFS_ENABLE_LOG y
           set_kv CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG y
           set_kv CONFIG_KSU_SUSFS_OPEN_REDIRECT y
           set_kv CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS y
 
-          echo "--- 后置状态 ---"
-          grep -E "CONFIG_KPROBES|CONFIG_KALLSYMS|CONFIG_KSU|CONFIG_KPM|CONFIG_EXT4_FS" "$D"
+          echo "--- 关键 config 状态 ---"
+          grep -E "^(#\s*)?CONFIG_(KSU|KPROBES|KPM|OVERLAY_FS|KALLSYMS)" "$D" | sort -u
 
       - name: Build kernel
         working-directory: kernel
         run: |
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$GITHUB_WORKSPACE/toolchain/gcc-arm64/bin:$GITHUB_WORKSPACE/toolchain/gcc-arm/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
           export KBUILD_BUILD_USER=github
           export KBUILD_BUILD_HOST=actions
 
@@ -157,9 +173,8 @@ jobs:
 
           make "${MAKE_ARGS[@]}" "${DEFCONFIG}"
 
-          # 打印最终 .config 里的关键开关
           echo "=== final .config sanity ==="
-          grep -E "^(CONFIG_KSU|CONFIG_KPM|CONFIG_KPROBES|CONFIG_KALLSYMS_ALL|CONFIG_EXT4_FS|CONFIG_KSU_SUSFS)" out/.config || true
+          grep -E "^CONFIG_(KSU|KSU_MANUAL_HOOK|KPM|OVERLAY_FS|KPROBES|KSU_SUSFS)=" out/.config | head -25
 
           set -o pipefail
           make -j"$(nproc)" "${MAKE_ARGS[@]}" 2>&1 | tee build.log
