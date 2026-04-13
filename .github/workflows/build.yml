@@ -90,6 +90,11 @@ jobs:
           sed -i 's| /$||' drivers/nfc/Makefile
           grep -n "nq-nci" drivers/nfc/Makefile || true
 
+          # drivers/scsi/ufs/Makefile 把 ufshcd.o 加了两次 (once via ufshcd-core-y, once direct)
+          # 删掉独立那行, 保留 ufshcd-core.o 即可
+          sed -i '/^obj-\$(CONFIG_SCSI_UFSHCD) += ufshcd\.o$/d' drivers/scsi/ufs/Makefile
+          grep "ufshcd" drivers/scsi/ufs/Makefile
+
       - name: Apply manual hook patches (6 files)
         working-directory: kernel
         run: |
