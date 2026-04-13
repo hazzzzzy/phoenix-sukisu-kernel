@@ -1,0 +1,5 @@
+kernel/
+toolchain/
+out/
+*.img
+*.log
