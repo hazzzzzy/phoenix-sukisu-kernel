@@ -55,7 +55,9 @@ jobs:
           # 直接 git clone fork（原 ShirkNeko 仓库已 404，不能用 setup.sh）
           git clone --depth=1 -b "$KSU_BRANCH" "$KSU_REPO" KernelSU
           # drivers/kernelsu 软链到 KernelSU/kernel
-          ln -sf "../../KernelSU/kernel" "drivers/kernelsu"
+          ln -sf "../KernelSU/kernel" "drivers/kernelsu"
+          # 验证解析正确
+          test -f drivers/kernelsu/Kconfig || (echo "FAIL: symlink target 不存在" && ls -la drivers/kernelsu && exit 1)
           # drivers/Makefile 挂载
           grep -q "obj-\$(CONFIG_KSU)" drivers/Makefile || \
             printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
