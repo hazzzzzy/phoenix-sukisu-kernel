@@ -144,6 +144,8 @@ jobs:
           unset_kv CONFIG_KPM
           # SUS_SU default y, 非 GKI 下会导致 ksu_devpts_hook 未定义, 显式关
           unset_kv CONFIG_KSU_SUSFS_SUS_SU
+          # MODVERSIONS + clang/lld 在 4.14 上会出 R_AARCH64_ABS32 relocation 错误
+          unset_kv CONFIG_MODVERSIONS
 
           # SUSFS 全家桶
           set_kv CONFIG_KSU_SUSFS y
