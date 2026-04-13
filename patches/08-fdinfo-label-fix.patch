@@ -1,0 +1,12 @@
+--- a/fs/notify/fdinfo.c
++++ b/fs/notify/fdinfo.c
+@@ -129,7 +129,7 @@ static void inotify_fdinfo(struct seq_file *m, struct fsnotify_mark *mark, struc
+ 			return;
+ out_free_pathname:
+ 			kfree(pathname);
+ 		}
+-out_seq_printf:
++out_seq_printf: ;
+ #endif
+ 		/*
+ 		 * IN_ALL_EVENTS represents all of the mask bits
