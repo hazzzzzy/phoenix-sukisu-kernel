@@ -57,7 +57,27 @@ jobs:
           echo "--- drivers/Makefile 是否已挂载 kernelsu ---"
           grep kernelsu drivers/Makefile || (echo "FAIL: setup.sh 没改 drivers/Makefile" && exit 1)
 
-      - name: Patch defconfig (开启 KSU + KPM + KPROBES)
+      - name: Apply susfs4ksu (kernel-4.14)
+        working-directory: kernel
+        run: |
+          git clone --depth=1 -b kernel-4.14 https://gitlab.com/simonpunk/susfs4ksu.git ../susfs4ksu
+          # 拷贝 susfs 的新文件到内核树
+          cp ../susfs4ksu/kernel_patches/fs/susfs.c    fs/
+          cp ../susfs4ksu/kernel_patches/fs/sus_su.c   fs/
+          cp ../susfs4ksu/kernel_patches/include/linux/susfs.h      include/linux/
+          cp ../susfs4ksu/kernel_patches/include/linux/susfs_def.h  include/linux/
+          cp ../susfs4ksu/kernel_patches/include/linux/sus_su.h     include/linux/
+          # 打主 patch（允许 fuzz=3 吸收高通魔改带来的小偏移）
+          patch -p1 -F 3 --no-backup-if-mismatch < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch | tee /tmp/susfs_apply.log
+          # 失败 hunk 检查
+          if grep -q "FAILED" /tmp/susfs_apply.log; then
+            echo "==== SUSFS patch 有 hunk 失败，拉 .rej 看下 ===="
+            find . -name "*.rej" -exec sh -c 'echo "---$1---"; cat "$1"' _ {} \;
+            exit 1
+          fi
+          echo "susfs patch 应用完成"
+
+      - name: Patch defconfig (开启 KSU + KPM + KPROBES + SUSFS)
         working-directory: kernel
         run: |
           D="arch/arm64/configs/${DEFCONFIG}"
@@ -83,6 +103,21 @@ jobs:
           set_kv CONFIG_KPM y
           set_kv CONFIG_MODULES y
           set_kv CONFIG_MODULE_UNLOAD y
+
+          # --- SUSFS ---
+          set_kv CONFIG_KSU_SUSFS y
+          set_kv CONFIG_KSU_SUSFS_SUS_PATH y
+          set_kv CONFIG_KSU_SUSFS_SUS_MOUNT y
+          set_kv CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT y
+          set_kv CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT y
+          set_kv CONFIG_KSU_SUSFS_SUS_KSTAT y
+          set_kv CONFIG_KSU_SUSFS_SUS_OVERLAYFS y
+          set_kv CONFIG_KSU_SUSFS_TRY_UMOUNT y
+          set_kv CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT y
+          set_kv CONFIG_KSU_SUSFS_SPOOF_UNAME y
+          set_kv CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG y
+          set_kv CONFIG_KSU_SUSFS_OPEN_REDIRECT y
+          set_kv CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS y
 
           echo "--- 后置状态 ---"
           grep -E "CONFIG_KPROBES|CONFIG_KALLSYMS|CONFIG_KSU|CONFIG_KPM|CONFIG_EXT4_FS" "$D"
@@ -115,7 +150,7 @@ jobs:
 
           # 打印最终 .config 里的关键开关
           echo "=== final .config sanity ==="
-          grep -E "^(CONFIG_KSU|CONFIG_KPM|CONFIG_KPROBES|CONFIG_KALLSYMS_ALL|CONFIG_EXT4_FS)=" out/.config || true
+          grep -E "^(CONFIG_KSU|CONFIG_KPM|CONFIG_KPROBES|CONFIG_KALLSYMS_ALL|CONFIG_EXT4_FS|CONFIG_KSU_SUSFS)" out/.config || true
 
           make -j"$(nproc)" "${MAKE_ARGS[@]}" 2>&1 | tee build.log
 
