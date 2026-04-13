@@ -83,6 +83,13 @@ jobs:
             exit 1
           fi
 
+      - name: Fix phoenix 源码自身 Makefile 小瑕疵
+        working-directory: kernel
+        run: |
+          # drivers/nfc/Makefile 末尾误加 "/" 导致 built-in.o 路径双斜杠
+          sed -i 's| /$||' drivers/nfc/Makefile
+          grep -n "nq-nci" drivers/nfc/Makefile || true
+
       - name: Apply manual hook patches (6 files)
         working-directory: kernel
         run: |
