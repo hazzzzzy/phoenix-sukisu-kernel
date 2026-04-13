@@ -56,6 +56,10 @@ jobs:
           ls KernelSU/kernel | head -20
           echo "--- drivers/Makefile 是否已挂载 kernelsu ---"
           grep kernelsu drivers/Makefile || (echo "FAIL: setup.sh 没改 drivers/Makefile" && exit 1)
+          # setup.sh 只软链 kernel/，但 kpm.h 依赖的 uapi/ 在仓库根目录
+          # 把 uapi/ 拷进 kernel/ 内，让 -I$(KSU_KERNEL_DIR) 能命中
+          cp -r KernelSU/uapi KernelSU/kernel/uapi
+          ls drivers/kernelsu/uapi/ | head -3
 
       - name: Apply susfs4ksu (kernel-4.14)
         working-directory: kernel
@@ -152,6 +156,7 @@ jobs:
           echo "=== final .config sanity ==="
           grep -E "^(CONFIG_KSU|CONFIG_KPM|CONFIG_KPROBES|CONFIG_KALLSYMS_ALL|CONFIG_EXT4_FS|CONFIG_KSU_SUSFS)" out/.config || true
 
+          set -o pipefail
           make -j"$(nproc)" "${MAKE_ARGS[@]}" 2>&1 | tee build.log
 
       - name: Locate build artifacts
