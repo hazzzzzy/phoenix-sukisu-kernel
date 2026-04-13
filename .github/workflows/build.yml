@@ -60,6 +60,10 @@ jobs:
           # 把 uapi/ 拷进 kernel/ 内，让 -I$(KSU_KERNEL_DIR) 能命中
           cp -r KernelSU/uapi KernelSU/kernel/uapi
           ls drivers/kernelsu/uapi/ | head -3
+          # kpm/Makefile 没有加 -I 父目录，ccflags 不继承自父 Kbuild 导致 uapi/ 找不着
+          echo 'ccflags-y += -I$(srctree)/$(src)/..' >> drivers/kernelsu/kpm/Makefile
+          echo "--- kpm/Makefile 末尾 ---"
+          tail -3 drivers/kernelsu/kpm/Makefile
 
       - name: Apply susfs4ksu (kernel-4.14)
         working-directory: kernel
