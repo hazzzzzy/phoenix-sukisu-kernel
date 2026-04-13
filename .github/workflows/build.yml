@@ -108,7 +108,8 @@ jobs:
           set_kv CONFIG_KALLSYMS y
           set_kv CONFIG_KALLSYMS_ALL y
           set_kv CONFIG_KSU y
-          set_kv CONFIG_KPM y
+          # KPM 在 4.14 编不过(access_ok 参数数量不兼容), 关掉; root 不依赖 KPM
+          set_kv CONFIG_KPM n
           set_kv CONFIG_MODULES y
           set_kv CONFIG_MODULE_UNLOAD y
 
